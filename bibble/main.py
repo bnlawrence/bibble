@@ -117,7 +117,7 @@ def _month_match(mon):
 def _month_name(monthnum):
     try:
         return month_name[int(monthnum)]
-    except (ValueError, KeyError):
+    except Exception, e:
         return ''
 
 
