@@ -18,10 +18,21 @@ MONTHS = {
     'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
 }
 
+def _unlatex(string):
+    """ Remove curly braces and other latex guff that we don't want for html output"""
+    for x,y in [('{',''),('}',''),('\&','&')]:
+        string = string.replace(x,y)
+    return string
+
 
 def _author_fmt(author):
     """Format an author's full name."""
     return u' '.join(author.first_names + author.middle_names + author.last_names)
+
+
+def _author_list(authors):
+    """Format a list of authors."""
+    return _andlist(list(map(_author_fmt, authors)))
 
 
 def _andlist(ss, sep=', ', seplast=', and ', septwo=' and '):
@@ -36,22 +47,25 @@ def _andlist(ss, sep=', ', seplast=', and ', septwo=' and '):
     return sep.join(ss[:-1]) + seplast + ss[-1]
 
 
-def _author_list(authors):
-    """Format a list of authors."""
-    return _andlist(list(map(_author_fmt, authors)))
-
-
 def _venue_type(entry):
     """Expand a venue type to a longer English description."""
     venuetype = ''
+    f = entry.fields
     if entry.type == 'inbook':
         venuetype = 'Chapter in '
     elif entry.type == 'techreport':
         venuetype = 'Technical Report '
     elif entry.type == 'phdthesis':
-        venuetype = 'Ph.D. thesis, {}'.format(entry.fields['school'])
+        venuetype = 'Ph.D. thesis, {}'.format(f['school'])
     elif entry.type == 'mastersthesis':
-        venuetype = 'Master\'s thesis, {}'.format(entry.fields['school'])
+        venuetype = 'Master\'s thesis, {}'.format(f['school'])
+    elif entry.type == 'unpublished':
+        if 'howpublished' in f: 
+            venuetype='Unpublished {}. '.format(_unlatex(f['howpublished']))
+        elif 'type' in f:
+            venuetype='Unpublished (type={}). '.format(f['type'])
+        else:
+            venuetype='Unpublished. '
     return venuetype
 
 
@@ -62,7 +76,13 @@ def _venue(entry, halt_if_unknown=True):
     f = entry.fields
     venue = ''
     if entry.type == 'article':
-        venue = f['journal']
+        # biblatex uses journaltitle instead of journal
+        if 'journal' in f:
+            venue = f['journal']
+        elif 'journaltitle' in f:
+            venue = f['journaltitle']
+        else:
+            raise ValueError('No valid journal title found for article')
         try:
             if f['volume'] and f['number']:
                 venue += ' {0}({1})'.format(f['volume'], f['number'])
@@ -98,6 +118,7 @@ def _venue(entry, halt_if_unknown=True):
         venue = '{0}{1}'.format(number, howpublished)
     elif entry.type == 'phdthesis' or entry.type == 'mastersthesis':
         venue = ''
+
     elif entry.type in ['unpublished','misc']:
         if 'eventtitle' in f:
             venue = f"In {f['eventtitle']}"
@@ -108,8 +129,8 @@ def _venue(entry, halt_if_unknown=True):
             raise ValueError('Unexpected bibtex entry type ', entry.type)
         venue = 'Unknown venue (type={})'.format(entry.type)
 
-    # remove curlies from venues -- useful in TeX, not here
-    venue = venue.replace('{','').replace('}','')
+    venue = _unlatex(venue)
+
     return venue
 
 
@@ -119,14 +140,12 @@ def _title(entry):
         try:
             title = entry.fields['chapter'] # prefer if available
         except KeyError:
-            title =  entry.fields['title']
+            title = entry.fields['title']
     else:
         title = entry.fields['title']
 
-    # remove curlies from titles -- useful in TeX, not here
-    title = title.replace('{', '').replace('}', '')
+    title = _unlatex(title)
     return title
-
 
 def _main_url(entry):
     """Get an entry's URL field (url or ee)."""
@@ -137,9 +156,15 @@ def _main_url(entry):
     return None
 
 
+def _doi(entry):
+    if 'doi' in entry.fields:
+        return entry.fields['doi']
+    else:
+        return ''
+
+
 def _extra_urls(entry):
     """Gather an entry's "*_url" fields into a dictionary.
-
     Returns a dict of URL types to URLs, e.g.
        { 'nytimes': 'http://nytimes.com/story/about/research.html',
           ... }
@@ -177,8 +202,7 @@ def _month_name(monthnum):
     """Turn a month number into a month name."""
     try:
         return month_name[int(monthnum)]
-    except:#(ValueError, KeyError):
-        print('abc')
+    except (ValueError, KeyError):
         return ''
 
 
