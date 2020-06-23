@@ -2,3 +2,4 @@
 
 Uses Pybtex to parse BibTeX files and Jinja2 for templates.
 """
+from .main import bibmain

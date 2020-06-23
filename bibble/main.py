@@ -21,7 +21,7 @@ MONTHS = {
 
 def _author_fmt(author):
     """Format an author's full name."""
-    return u' '.join(author.first() + author.middle() + author.last())
+    return u' '.join(author.first_names + author.middle_names + author.last_names)
 
 
 def _andlist(ss, sep=', ', seplast=', and ', septwo=' and '):
@@ -55,8 +55,10 @@ def _venue_type(entry):
     return venuetype
 
 
-def _venue(entry):
-    """Format an entry's venue data."""
+def _venue(entry, halt_if_unknown=True):
+    """Format an entry's venue data.
+    set halt_if_unknown during website debugging
+    """
     f = entry.fields
     venue = ''
     if entry.type == 'article':
@@ -66,8 +68,15 @@ def _venue(entry):
                 venue += ' {0}({1})'.format(f['volume'], f['number'])
         except KeyError:
             pass
-    elif entry.type == 'inproceedings':
-        venue = f['booktitle']
+    elif entry.type in ['inproceedings', 'incollection']:
+        if 'booktitle' in f:
+            venue = f['booktitle']
+        elif 'eventtitle' in f:
+            venue = f['eventtitle']
+        elif 'conference' in f:
+            venue = f['conference']
+        else:
+            raise ValueError(f'Problem with entry {entry}')
         try:
             if f['series']:
                 venue += ' ({})'.format(f['series'])
@@ -76,10 +85,27 @@ def _venue(entry):
     elif entry.type == 'inbook':
         venue = f['title']
     elif entry.type == 'techreport':
-        venue = '{0}, {1}'.format(f['number'], f['institution'])
+        if 'number' in f:
+            number = f"{f['number']}, "
+        else:
+            number = ''
+        if 'institution' in f:
+            howpublished = f['institution']
+        elif 'publisher' in f:
+            howpublished = f['publisher']
+        else:
+            howpublished = ''
+        venue = '{0}{1}'.format(number, howpublished)
     elif entry.type == 'phdthesis' or entry.type == 'mastersthesis':
         venue = ''
+    elif entry.type in ['unpublished','misc']:
+        if 'eventtitle' in f:
+            venue = f"In {f['eventtitle']}"
+        else:
+            venue = 'Unpublished'
     else:
+        if halt_if_unknown:
+            raise ValueError('Unexpected bibtex entry type ', entry.type)
         venue = 'Unknown venue (type={})'.format(entry.type)
 
     # remove curlies from venues -- useful in TeX, not here
@@ -90,7 +116,10 @@ def _venue(entry):
 def _title(entry):
     """Format a title field for HTML display."""
     if entry.type == 'inbook':
-        title = entry.fields['chapter']
+        try:
+            title = entry.fields['chapter'] # prefer if available
+        except KeyError:
+            title =  entry.fields['title']
     else:
         title = entry.fields['title']
 
@@ -125,6 +154,17 @@ def _extra_urls(entry):
         urls[urltype] = v
     return urls
 
+def _doi(entry):
+    """ Handle DOIs and ensure they are linkable"""
+    if 'doi' in entry.fields:
+        doi = entry.fields['doi']
+        if doi.startswith('http'):
+            return doi
+        else:
+            return 'https://dx.doi.org/' + doi
+    else:
+        return ''
+
 
 def _month_match(mon):
     """Turn a month specifier (name or number) into a month name."""
@@ -137,14 +177,19 @@ def _month_name(monthnum):
     """Turn a month number into a month name."""
     try:
         return month_name[int(monthnum)]
-    except (ValueError, KeyError):
+    except:#(ValueError, KeyError):
+        print('abc')
         return ''
 
 
 def _sortkey(entry):
     """Generate a sorting key for an entry based on its date."""
     e = entry.fields
-    year = '{:04d}'.format(int(e['year']))
+    try:
+        year = '{:04d}'.format(int(e['year']))
+    except:
+        print(e)
+        raise
     try:
         monthnum = _month_match(e['month'])
         year += '{:02d}'.format(monthnum)
@@ -158,6 +203,30 @@ def _sortkey(entry):
 @click.argument('template', metavar='TEMPLATE.html', type=click.File('r'))
 @click.option('-o', '--output', type=click.File('w'))
 def main(bibfile, template, output):
+    """ Shimmy to bibmain to allow easier access to tests"""
+    output = bibmain(bibfile, template, output)
+    print(output)
+
+
+def _better_biblatex(entry):
+    """ Better_biblatex exports from Zotero do a few things differently.
+    Handle gracefully.
+    """
+    if 'year' not in entry:
+        if 'date' not in entry:
+            raise ValueError('No valid date for %s' % entry)
+        else:
+            entry['year'] = entry['date'][0:4]
+            if len(entry['date']) >= 7:
+                entry['month'] = entry['date'][5:7]
+
+    if 'journaltitle' in entry:
+        entry['journal'] = entry['journaltitle']
+
+    return entry
+
+
+def bibmain(bibfile, template, output):
     # pylint: disable=unused-argument
     """Render a BibTeX .bib file to HTML using an HTML template."""
     tenv = jinja2.sandbox.SandboxedEnvironment()
@@ -169,6 +238,7 @@ def main(bibfile, template, output):
     tenv.filters['main_url'] = _main_url
     tenv.filters['extra_urls'] = _extra_urls
     tenv.filters['monthname'] = _month_name
+    tenv.filters['doi'] = _doi
     tmpl = tenv.from_string(template.read())
 
     # Parse the BibTeX file.
@@ -177,11 +247,12 @@ def main(bibfile, template, output):
     # Include the bibliography key in each entry.
     for k, v in db.entries.items():
         v.fields['key'] = k
+        v.fields = _better_biblatex(v.fields)
 
     # Render the template.
     bib_sorted = sorted(db.entries.values(), key=_sortkey, reverse=True)
     out = tmpl.render(entries=bib_sorted)
-    print(out)
+    return out
 
 
 if __name__ == '__main__':
